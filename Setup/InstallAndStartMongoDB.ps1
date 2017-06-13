@@ -1,5 +1,5 @@
 param(
-	[string]$Path = $(Get-Location),
+	[string]$Path = ($PSScriptRoot | split-path -parent),
     [int]$Quiet = 0
 )
 
@@ -165,7 +165,8 @@ Function ConfigureMongoDB (
 
 
 Clear-Host
-$cd = $(Get-Location)
+#$cd = $(Get-Location)
+$cd = $PSScriptRoot | split-path -parent
 
 Write-Host-H1 -Message "Install MongoDB Service"
 
