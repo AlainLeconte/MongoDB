@@ -1,60 +1,31 @@
 param(
-	[string]$Path = ($PSScriptRoot | split-path -parent),
+	[string]$mongoDbPath = ($PSScriptRoot | split-path -parent),
+    [string]$mongoDbServiceName = "MongoDB347",
+    [int]$mongoDbPort = 27017,
     [int]$Quiet = 0
 )
 
-Function Pause (
-    $Message = "(PS) Press any key to continue . . . "
-){
-    if ((Test-Path variable:psISE) -and $psISE) {
-        $Shell = New-Object -ComObject "WScript.Shell"
-        $Button = $Shell.Popup("Click OK to continue.", 0, "Script Paused", 0)
-    }
-    else {     
-        Write-Host -NoNewline $Message
-        [void][System.Console]::ReadKey($true)
-        Write-Host
-    }
-}
+# Load functions
+$stdFuntionsPath = (split-path -parent $PSCommandPath)
+. "$stdFuntionsPath\StandardFunctions.ps1"
 
+# Global params
+$mongoMsi = "mongodb-win32-x86_64-2008plus-ssl-v3.4-latest-signed.msi"
+$url = "http://downloads.mongodb.org/win32/$mongoMsi"
 
-Function Write-Host-H1(
-    [string]$Message
-){
-    Write-Host -NoNewline "---" -ForegroundColor White -BackgroundColor Green
-    Write-Host -NoNewline " $Message "
-    Write-Host "----" -ForegroundColor White -BackgroundColor Green
-}
-
-
-Function Write-Host-H2(
-    [string]$Message
-){
-    Write-Host -NoNewline "---" -ForegroundColor White -BackgroundColor Blue
-    Write-Host -NoNewline " $Message "
-    Write-Host "----" -ForegroundColor White -BackgroundColor Blue
-}
-
-Function Write-Host-Param(
-    [string]$ParamName,
-    [string]$Value
-){
-    Write-Host -NoNewline "  >" -ForegroundColor Black -BackgroundColor Yellow
-    Write-Host -NoNewline "$ParamName -> "
-    Write-Host $Value -ForegroundColor White
-}
-
-Function ProceedYN (
-    [string]$Message
-) {
-    if ($Quiet -eq 1) {return $true}
-    $answer = Read-Host "$Message (y/n)"
-    return ($answer -eq 'y')
-}
 
 # Determines if a Service exists with a name as defined in $ServiceName.
 # Returns a boolean $True or $False.
 Function ServiceExists([string] $ServiceName) {
+	Write-Host
+	Write-Host-H2 -Message "func ServiceExists"
+    foreach ($key in $MyInvocation.BoundParameters.keys)
+    {
+        $value = (get-variable $key).Value 
+        Write-Host-Param -ParamName $key -Value $value
+    }
+	Write-Host
+
     [bool] $Return = $False
     # If you use just "Get-Service $ServiceName", it will return an error if 
     # the service didn't exist.  Trick Get-Service to return an array of 
@@ -68,7 +39,7 @@ Function ServiceExists([string] $ServiceName) {
 
 
 Function InstallMongoDB (
-    [string]$Path
+    [string]$mongoDbPath
 )
 {
 	Write-Host
@@ -79,10 +50,24 @@ Function InstallMongoDB (
         Write-Host-Param -ParamName $key -Value $value
     }
 	Write-Host
-    Write-Host Installing MongoDB to $Path ... -ForegroundColor Black -BackgroundColor White
+    
     Try {
-        Start-Process msiexec.exe -Wait -ArgumentList " /q /i $PSScriptRoot\mongodb-win32-x86_64-2008plus-ssl-3.4.4-signed.msi INSTALLLOCATION=`"$Path`" ADDLOCAL=`"Server,Router,Client`""
+        $msiFile =  "$mongoDbPath\$mongoMsi" 
+        if (-Not (Test-Path $msiFile))
+        {
+            Write-Host Downloading MongoDB ($mongoMsi) installer to $mongoDbPath ... -ForegroundColor Black -BackgroundColor White
+            $webClient = New-Object System.Net.WebClient 
+            $webClient.DownloadFile($url,$msiFile)
+            Write-Host MongoDB downloaded -ForegroundColor Green
+        }
+    
+        Write-Host Installing MongoDB ($mongoMsi) to $mongoDbPath ... -ForegroundColor Black -BackgroundColor White
+        Start-Process msiexec.exe -Wait -ArgumentList " /q /i $msiFile INSTALLLOCATION=`"$mongoDbPath`" ADDLOCAL=`"Server,Router,Client`""
         Write-Host MondoDB installed -ForegroundColor Green
+
+        #Write-Host Remove MongoDB ($mongoMsi) installer from $mongoDbPath ... -ForegroundColor Black -BackgroundColor White
+        #Remove-Item $msiFile -recurse -force 
+        #Write-Host MondoDB installer removed -ForegroundColor Green
     }
     Catch
     {
@@ -92,8 +77,9 @@ Function InstallMongoDB (
 }
 
 Function ConfigureMongoDB (
-    [string]$Path,
-    [string]$ServiceName
+    [string]$mongoDbPath,
+    [string]$mongoDbServiceName,
+    [int]$mongodbPort
 )
 {
 	Write-Host
@@ -104,33 +90,34 @@ Function ConfigureMongoDB (
         Write-Host-Param -ParamName $key -Value $value
     }
 	Write-Host
-    Write-Host Configuring MongoDB to $Path ... -ForegroundColor Black -BackgroundColor White
+    Write-Host Configuring MongoDB to $mongoDbPath ... -ForegroundColor Black -BackgroundColor White
 
 
     Try {
-        if (ServiceExists -ServiceName $ServiceName)
-        {
-            Write-Host $ServiceName service should be stopped and removed ... -ForegroundColor Black -BackgroundColor White
-            & sc.exe stop $ServiceName
-            & sc.exe delete $ServiceName
-            Write-Host $ServiceName service removed -ForegroundColor Green
-        }
-
-
-        if (Test-Path $cd\data)
+        if (ServiceExists -ServiceName $mongoDbServiceName)
         {
             Write-Host
-            Write-Host Removing existing $cd\data folder... -ForegroundColor Black -BackgroundColor White
-            Remove-Item $cd\data -Force -Recurse -ErrorAction Stop
-            Write-Host $cd\data folder removed -ForegroundColor Green
+            Write-Host $mongoDbServiceName service should be stopped and removed ... -ForegroundColor Black -BackgroundColor White
+            & sc.exe stop $mongoDbServiceName
+            & sc.exe delete $mongoDbServiceName
+            Write-Host $mongoDbServiceName service removed -ForegroundColor Green
         }
-        Write-Host
-        Write-Host Creating $cd\data folders... -ForegroundColor Black -BackgroundColor White
-        New-Item $Path\data\db -type directory -Force
-        New-Item $Path\data\log -type directory -Force
-        Write-Host $cd\data folder created -ForegroundColor Green
 
-        $ConfigPath = "$cd\mongod.cfg" 
+        if (Test-Path $mongoDbPath\data)
+        {
+            Write-Host
+            Write-Host Removing existing $mongoDbPath\data folder... -ForegroundColor Black -BackgroundColor White
+            Remove-Item $mongoDbPath\data -Force -Recurse -ErrorAction Stop
+            Write-Host $mongoDbPath\data folder removed -ForegroundColor Green
+        }
+
+        Write-Host
+        Write-Host Creating $mongoDbPath\data folders... -ForegroundColor Black -BackgroundColor White
+        New-Item $mongoDbPath\data\db -type directory -Force
+        New-Item $mongoDbPath\data\log -type directory -Force
+        Write-Host $mongoDbPath\data folder created -ForegroundColor Green
+
+        $ConfigPath = "$mongoDbPath\mongod.cfg" 
 
         Write-Host
         Write-Host Copying $PSScriptRoot\mongod.cfg configuration file to $ConfigPath... -ForegroundColor Black -BackgroundColor White
@@ -139,22 +126,27 @@ Function ConfigureMongoDB (
         
         Write-Host
         Write-Host Updating $ConfigPath configuration file... -ForegroundColor Black -BackgroundColor White
-        (Get-Content $ConfigPath) -replace "<CurrentDrivePath>",$cd | Set-Content $ConfigPath         
+        (Get-Content $ConfigPath) -replace "<MongoDbPath>",$mongoDbPath | Set-Content $ConfigPath         
+        (Get-Content $ConfigPath) -replace "<MongoDbPort>",$mongodbPort | Set-Content $ConfigPath         
         Write-Host $ConfigPath updated -ForegroundColor Green
 
         Write-Host
-        Write-Host Configuring $ServiceName service ... -ForegroundColor Black -BackgroundColor White
-        & "$cd\bin\mongod" --config $cd\mongod.cfg --install --serviceName MongoDB344 --serviceDisplayName MongoDB344
-        Write-Host $ServiceName service configured -ForegroundColor Green
+        Write-Host Configuring $mongoDbServiceName service ... -ForegroundColor Black -BackgroundColor White
+        & "$mongoDbPath\bin\mongod" --config $mongoDbPath\mongod.cfg --install --serviceName $mongoDbServiceName --serviceDisplayName $mongoDbServiceName
+        Write-Host $mongoDbServiceName service configured -ForegroundColor Green
 
-        if (ServiceExists -ServiceName $ServiceName)
+        if (ServiceExists -ServiceName $mongoDbServiceName)
         {
-            Write-Host Starting $ServiceName service ... -ForegroundColor Black -BackgroundColor White
-            & net start $ServiceName
-            Write-Host $ServiceName service started -ForegroundColor Green
+            Write-Host Starting $mongoDbServiceName service ... -ForegroundColor Black -BackgroundColor White
+            & net start $mongoDbServiceName
+            Write-Host $mongoDbServiceName service started -ForegroundColor Green
         }
-
         Write-Host MongoDB configured and started -ForegroundColor Green
+
+        Write-Host
+        Write-Host Configuring $mongoDbServiceName Users and Databases... -ForegroundColor Black -BackgroundColor White
+        . $mongoDbPath\bin\mongo.exe -port $mongoDbPort $PSScriptRoot\MongoUnity.js > null
+        Write-Host MongoDB Users and Databases configured -ForegroundColor Green
     }
     Catch
     {
@@ -183,11 +175,45 @@ try {
     $answer = ProceedYN "Install MongoDB Service?"
     if ($answer -eq $true) 
     {
-        InstallMongoDB -Path $Path 
-        ConfigureMongoDB -Path $Path -ServiceName "MongoDB344"
+        if ((Test-Path -path $mongoDbPath) -eq $True) 
+        { 
+            Write-Host
+            Write-Host "Seems you already installed MongoDB"
+            $answer = ProceedYN "Remove and Re-Install MongoDB Service?"
+            if ($answer -eq $true) 
+            {
+                if (ServiceExists -ServiceName $mongoDbServiceName)
+                {
+                    Write-Host
+                    Write-Host $mongoDbServiceName service should be stopped and removed ... -ForegroundColor Black -BackgroundColor White
+                    & sc.exe stop $mongoDbServiceName
+                    & sc.exe delete $mongoDbServiceName
+                    Write-Host $mongoDbServiceName service removed -ForegroundColor Green
+                }
 
+                if (Test-Path $mongoDbPath\data)
+                {
+                    Write-Host
+                    Write-Host Removing existing $mongoDbPath\data folder... -ForegroundColor Black -BackgroundColor White
+                    Remove-Item $mongoDbPath\data -Force -Recurse -ErrorAction Stop
+                    Write-Host $mongoDbPath\data folder removed -ForegroundColor Green
+                }
+            }
+
+            else {
+                Exit
+            }
+        }
+        else {
+            New-Item $mongoDbPath -type directory
+        }
+
+        InstallMongoDB -mongoDbPath $mongoDbPath 
+        ConfigureMongoDB -mongoDbPath $mongoDbPath -mongoDbServiceName $mongoDbServiceName -mongodbPort $mongoDbPort
+        Pause
     }
 }
+
 catch {
     Write-Error $_.Exception.Message
     Pause
