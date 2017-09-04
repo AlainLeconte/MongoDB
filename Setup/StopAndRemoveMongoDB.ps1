@@ -1,8 +1,8 @@
 param(
 	[string]$mongoDbPath = ($PSScriptRoot | split-path -parent),
     [string]$mongoDbServiceName = "MongoDB347",
-    [int]$mongoDbPort = 27017,
-    [int]$Quiet = 0
+    [int]$Quiet = 0,
+    [int]$clearHost = 1
 )
 
 # Load functions
@@ -11,42 +11,10 @@ $stdFuntionsPath = (split-path -parent $PSCommandPath)
 
 # Global params
 $mongoMsi = "mongodb-win32-x86_64-2008plus-ssl-v3.4-latest-signed.msi"
+#$mongoMsi = "mongodb-win32-x86_64-2008plus-ssl-2.8.0-rc5-signed.msi"
+
 $url = "http://downloads.mongodb.org/win32/$mongoMsi"
 
-# Determines if a Service exists with a name as defined in $ServiceName.
-# Returns a boolean $True or $False.
-Function ServiceExists([string] $ServiceName) {
-	Write-Host
-	Write-Host-H2 -Message "func ServiceExists"
-    foreach ($key in $MyInvocation.BoundParameters.keys)
-    {
-        $value = (get-variable $key).Value 
-        Write-Host-Param -ParamName $key -Value $value
-    }
-	Write-Host
-
-    [bool] $Return = $False
-    # If you use just "Get-Service $ServiceName", it will return an error if 
-    # the service didn't exist.  Trick Get-Service to return an array of 
-    # Services, but only if the name exactly matches the $ServiceName.  
-    # This way you can test if the array is emply.
-    if ( Get-Service "$ServiceName*" -Include $ServiceName ) {
-        $Return = $True
-    }
-    Return $Return
-}
-
-function Uninstall($programName)
-{
-    $app = Get-WmiObject -Class Win32_Product -Filter ("Name = '" + $programName + "'")
-    if($app -ne $null)
-    {
-        $app.Uninstall()
-    }
-    else {
-        echo ("Could not find program '" + $programName + "'")
-    }
-}
 
 Function UninstallMongoDB (
     [string]$mongoDbPath,
@@ -73,10 +41,12 @@ Function UninstallMongoDB (
             & sc.exe delete $mongoDbServiceName
             Write-Host $mongoDbServiceName service removed -ForegroundColor Green
     	    
-            Write-Host
-            Write-Host Uninstalling MongoDB ($msiFile) from $mongoDbPath ... -ForegroundColor Black -BackgroundColor White
-            Start-Process msiexec.exe -Wait -ArgumentList " /q /uninstall $msiFile INSTALLLOCATION=`"$mongoDbPath`" ADDLOCAL=`"Server,Router,Client`""
-            Write-Host MondoDB Uninstalled -ForegroundColor Green
+            if (Test-Path $msiFile) {
+                Write-Host
+                Write-Host Uninstalling MongoDB ($msiFile) from $mongoDbPath ... -ForegroundColor Black -BackgroundColor White
+                Start-Process msiexec.exe -Wait -ArgumentList " /q /uninstall $msiFile INSTALLLOCATION=`"$mongoDbPath`" ADDLOCAL=`"Server,Router,Client`""
+                Write-Host MondoDB Uninstalled -ForegroundColor Green
+            }
         }
         else 
         {
@@ -157,7 +127,9 @@ Function RemoveMongoDBData (
 }
 
 
-Clear-Host
+if ($clearHost -eq 1) {
+    Clear-Host
+}
 #$cd = $(Get-Location)
 $cd = ($PSScriptRoot | split-path -parent)
 

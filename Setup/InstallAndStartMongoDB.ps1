@@ -2,7 +2,10 @@ param(
 	[string]$mongoDbPath = ($PSScriptRoot | split-path -parent),
     [string]$mongoDbServiceName = "MongoDB347",
     [int]$mongoDbPort = 27017,
-    [int]$Quiet = 0
+    [string]$mongoDbDNS,
+    [string]$mongoDbPrefix = "Local",
+    [int]$Quiet = 0,
+    [int]$clearHost = 1
 )
 
 # Load functions
@@ -11,39 +14,17 @@ $stdFuntionsPath = (split-path -parent $PSCommandPath)
 
 # Global params
 $mongoMsi = "mongodb-win32-x86_64-2008plus-ssl-v3.4-latest-signed.msi"
-$url = "http://downloads.mongodb.org/win32/$mongoMsi"
+$mongoZip = "mongodb-win32-x86_64-2008plus-ssl-v3.4-latest.zip"
+#$mongoMsi = "mongodb-win32-x86_64-2008plus-ssl-2.8.0-rc5-signed.msi"
+$urlMsi = "http://downloads.mongodb.org/win32/$mongoMsi"
+$urlZip = "http://downloads.mongodb.org/win32/$mongoZip"
 
-
-# Determines if a Service exists with a name as defined in $ServiceName.
-# Returns a boolean $True or $False.
-Function ServiceExists([string] $ServiceName) {
-	Write-Host
-	Write-Host-H2 -Message "func ServiceExists"
-    foreach ($key in $MyInvocation.BoundParameters.keys)
-    {
-        $value = (get-variable $key).Value 
-        Write-Host-Param -ParamName $key -Value $value
-    }
-	Write-Host
-
-    [bool] $Return = $False
-    # If you use just "Get-Service $ServiceName", it will return an error if 
-    # the service didn't exist.  Trick Get-Service to return an array of 
-    # Services, but only if the name exactly matches the $ServiceName.  
-    # This way you can test if the array is emply.
-    if ( Get-Service "$ServiceName*" -Include $ServiceName ) {
-        $Return = $True
-    }
-    Return $Return
-}
-
-
-Function InstallMongoDB (
+Function InstallMongoDBMsi (
     [string]$mongoDbPath
 )
 {
 	Write-Host
-	Write-Host-H2 -Message "func InstallMongoDB"
+	Write-Host-H2 -Message "func InstallMongoDBMsi"
     foreach ($key in $MyInvocation.BoundParameters.keys)
     {
         $value = (get-variable $key).Value 
@@ -57,10 +38,10 @@ Function InstallMongoDB (
         {
             Write-Host Downloading MongoDB ($mongoMsi) installer to $mongoDbPath ... -ForegroundColor Black -BackgroundColor White
             $webClient = New-Object System.Net.WebClient 
-            $webClient.DownloadFile($url,$msiFile)
+            $webClient.DownloadFile($urlMsi,$msiFile)
             Write-Host MongoDB downloaded -ForegroundColor Green
         }
-    
+
         Write-Host Installing MongoDB ($mongoMsi) to $mongoDbPath ... -ForegroundColor Black -BackgroundColor White
         Start-Process msiexec.exe -Wait -ArgumentList " /q /i $msiFile INSTALLLOCATION=`"$mongoDbPath`" ADDLOCAL=`"Server,Router,Client`""
         Write-Host MondoDB installed -ForegroundColor Green
@@ -76,10 +57,55 @@ Function InstallMongoDB (
     }
 }
 
+
+Function InstallMongoDBZip (
+    [string]$mongoDbPath
+)
+{
+	Write-Host
+	Write-Host-H2 -Message "func InstallMongoDBZip"
+    foreach ($key in $MyInvocation.BoundParameters.keys)
+    {
+        $value = (get-variable $key).Value 
+        Write-Host-Param -ParamName $key -Value $value
+    }
+	Write-Host
+    
+    Try {
+        $zipDist =  "$mongoDbPath\$mongoZip" 
+        if (-Not (Test-Path $zipDist))
+        {
+            Write-Host Downloading MongoDB ($mongoZip) to $mongoDbPath ... -ForegroundColor Black -BackgroundColor White
+            $webClient = New-Object System.Net.WebClient 
+            $webClient.DownloadFile($urlZip,$zipDist)
+            Write-Host MongoDB downloaded -ForegroundColor Green
+        }
+ 
+        Write-Host Unzipping $zipDist to $mongoDbPath... -ForegroundColor Black -BackgroundColor White
+        #Expand-Archive -LiteralPath $zipDist -DestinationPath $mongoDbPath
+        [Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem') | Out-Null
+        [IO.Compression.ZipFile]::OpenRead($zipDist).Entries | % {
+            $target = $mongoDbPath+$_.FullName.replace($_.FullName.split('/')[0],'')
+            $parent = Split-Path -Parent $target
+            if (-not (Test-Path -LiteralPath $parent)) {
+                 New-Item -Path $parent -Type Directory | Out-Null
+            }
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($_, $target, $true)
+        }
+        Write-Host $zipDist unzipped -ForegroundColor Green
+    }
+    Catch
+    {
+        Write-Warning $_.Exception.Message
+        throw  
+    }
+}
+
 Function ConfigureMongoDB (
     [string]$mongoDbPath,
     [string]$mongoDbServiceName,
-    [int]$mongodbPort
+    [int]$mongodbPort,
+    [string]$monboDbPrefix
 )
 {
 	Write-Host
@@ -143,9 +169,20 @@ Function ConfigureMongoDB (
         }
         Write-Host MongoDB configured and started -ForegroundColor Green
 
+        $createSitecoreDbJsPath = "$mongoDbPath\CreateSitecoreDb.js"
+        Write-Host
+        Write-Host Copying $PSScriptRoot\Scripts\CreateSitecoreDb.js configuration file to $createSitecoreDbJsPath... -ForegroundColor Black -BackgroundColor White
+        Copy-Item $PSScriptRoot\Scripts\CreateSitecoreDb.js $createSitecoreDbJsPath -Force
+        Write-Host $PSScriptRoot\Scripts\CreateSitecoreDb.js copied to $createSitecoreDbJsPath -ForegroundColor Green
+        
+        Write-Host
+        Write-Host Updating $createSitecoreDbJsPath configuration file... -ForegroundColor Black -BackgroundColor White
+        (Get-Content $createSitecoreDbJsPath) -replace "<prefix>",$mongoDbPrefix | Set-Content $createSitecoreDbJsPath         
+        Write-Host $createSitecoreDbJsPath updated -ForegroundColor Green
+
         Write-Host
         Write-Host Configuring $mongoDbServiceName Users and Databases... -ForegroundColor Black -BackgroundColor White
-        . $mongoDbPath\bin\mongo.exe -port $mongoDbPort $PSScriptRoot\MongoUnity.js > null
+        . $mongoDbPath\bin\mongo.exe -port $mongoDbPort $createSitecoreDbJsPath > null
         Write-Host MongoDB Users and Databases configured -ForegroundColor Green
     }
     Catch
@@ -156,7 +193,41 @@ Function ConfigureMongoDB (
 }
 
 
-Clear-Host
+function UpdateHost (
+    [string]$mongoDbDNS
+)
+{
+	Write-Host
+	Write-Host-H2 -Message "func UpdateHost"
+    foreach ($key in $MyInvocation.BoundParameters.keys)
+    {
+        $value = (get-variable $key).Value 
+        Write-Host-Param -ParamName $key -Value $value
+    }
+	Write-Host
+    
+    Write-Host Updating Hostfile with MongoDB DNS ($mongoDbDNS) if needed... -ForegroundColor Black -BackgroundColor White
+    Try {
+        $wd=$($env:windir)+'\system32\Drivers\etc\hosts'
+        If ((Get-Content $wd ) -notcontains "127.0.0.1	$mongoDbDNS")
+        {
+            Write-Host
+            Write-Host 'Updating Host file...' -ForegroundColor Black -BackgroundColor White 
+            ac -Encoding UTF8  $wd "`r`n# MongoDb Unity`r`n127.0.0.1	$mongoDbDNS";
+            Write-Host Host file updated -ForegroundColor Green
+        }
+    }
+    
+    Catch
+    {
+        Write-Warning $_.Exception.Message
+        throw  
+    }
+}
+
+if ($clearHost -eq 1){
+    Clear-Host
+}
 #$cd = $(Get-Location)
 $cd = $PSScriptRoot | split-path -parent
 
@@ -208,8 +279,10 @@ try {
             New-Item $mongoDbPath -type directory
         }
 
-        InstallMongoDB -mongoDbPath $mongoDbPath 
-        ConfigureMongoDB -mongoDbPath $mongoDbPath -mongoDbServiceName $mongoDbServiceName -mongodbPort $mongoDbPort
+        #InstallMongoDBMsi -mongoDbPath $mongoDbPath 
+        InstallMongoDBZip -mongoDbPath $mongoDbPath 
+        ConfigureMongoDB -mongoDbPath $mongoDbPath -mongoDbServiceName $mongoDbServiceName -mongodbPort $mongoDbPort -monboDbPrefix $mongoDbPrefix
+        UpdateHost -mongoDbDNS $mongoDbDNS
         Pause
     }
 }
